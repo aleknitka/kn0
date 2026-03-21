@@ -1,4 +1,4 @@
-"""Data access layer: DocumentStore, EntityStore, RelationshipStore."""
+"""Data access layer: DocumentStore, EntityStore, RelationshipStore, EventStore."""
 
 from __future__ import annotations
 
@@ -9,13 +9,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import select, text, update
+from sqlalchemy import func, select, text, update
 from sqlalchemy.engine import Connection
 
 from kn0.persistence.models import (
     documents,
     entities,
     entity_mentions,
+    event_participants,
+    event_source_documents,
+    events,
     relationship_evidence,
     relationships,
 )
@@ -329,3 +332,249 @@ class RelationshipStore:
         q = q.limit(limit).offset(offset)
         rows = self._conn.execute(q).mappings().all()
         return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# EventStore
+# ---------------------------------------------------------------------------
+
+
+class EventStore:
+    def __init__(self, conn: Connection) -> None:
+        self._conn = conn
+
+    def create(
+        self,
+        title: str,
+        event_type: str,
+        *,
+        description: str | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        location_entity_id: str | None = None,
+        attributes: dict[str, Any] | None = None,
+    ) -> str:
+        """Insert a new event row and return its UUID."""
+        event_id = _new_id()
+        now = _now()
+        self._conn.execute(
+            events.insert().values(
+                id=event_id,
+                title=title,
+                event_type=event_type,
+                description=description,
+                start_date=start_date,
+                end_date=end_date,
+                location_entity_id=location_entity_id,
+                attributes=json.dumps(attributes or {}),
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        return event_id
+
+    def get(self, event_id: str) -> dict[str, Any] | None:
+        """Fetch a single event row by ID, with parsed attributes."""
+        row = self._conn.execute(
+            select(events).where(events.c.id == event_id)
+        ).mappings().first()
+        if row is None:
+            return None
+        result = dict(row)
+        result["attributes"] = json.loads(result.get("attributes") or "{}")
+        return result
+
+    def update(
+        self,
+        event_id: str,
+        *,
+        title: str | None = None,
+        description: str | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        attributes: dict[str, Any] | None = None,
+    ) -> None:
+        """Partial update of event fields; always refreshes updated_at."""
+        values: dict[str, Any] = {"updated_at": _now()}
+        if title is not None:
+            values["title"] = title
+        if description is not None:
+            values["description"] = description
+        if start_date is not None:
+            values["start_date"] = start_date
+        if end_date is not None:
+            values["end_date"] = end_date
+        if attributes is not None:
+            values["attributes"] = json.dumps(attributes)
+        self._conn.execute(update(events).where(events.c.id == event_id).values(**values))
+
+    def add_participant(
+        self,
+        event_id: str,
+        entity_id: str,
+        role: str | None = None,
+    ) -> str:
+        """Link an entity to an event with an optional role; return participant row ID."""
+        participant_id = _new_id()
+        self._conn.execute(
+            event_participants.insert().values(
+                id=participant_id,
+                event_id=event_id,
+                entity_id=entity_id,
+                role=role,
+                created_at=_now(),
+            )
+        )
+        return participant_id
+
+    def remove_participant(
+        self,
+        event_id: str,
+        entity_id: str,
+        role: str | None = None,
+    ) -> None:
+        """Remove a participant link, optionally filtered by role."""
+        q = event_participants.delete().where(
+            event_participants.c.event_id == event_id,
+            event_participants.c.entity_id == entity_id,
+        )
+        if role is not None:
+            q = q.where(event_participants.c.role == role)
+        self._conn.execute(q)
+
+    def get_participants(self, event_id: str) -> list[dict[str, Any]]:
+        """Return participant rows joined with entity canonical_name and type."""
+        rows = self._conn.execute(
+            select(
+                event_participants.c.entity_id,
+                event_participants.c.role,
+                event_participants.c.created_at,
+                entities.c.canonical_name,
+                entities.c.entity_type,
+            )
+            .join(entities, event_participants.c.entity_id == entities.c.id)
+            .where(event_participants.c.event_id == event_id)
+        ).mappings().all()
+        return [dict(r) for r in rows]
+
+    def add_source_document(
+        self,
+        event_id: str,
+        document_id: str,
+        *,
+        passage_text: str | None = None,
+        confidence: float = 0.5,
+    ) -> str:
+        """Link a source document to an event; return source row ID."""
+        source_id = _new_id()
+        self._conn.execute(
+            event_source_documents.insert().values(
+                id=source_id,
+                event_id=event_id,
+                document_id=document_id,
+                passage_text=passage_text,
+                confidence=confidence,
+                created_at=_now(),
+            )
+        )
+        return source_id
+
+    def get_source_documents(self, event_id: str) -> list[dict[str, Any]]:
+        """Return source document rows for an event."""
+        rows = self._conn.execute(
+            select(event_source_documents).where(
+                event_source_documents.c.event_id == event_id
+            )
+        ).mappings().all()
+        return [dict(r) for r in rows]
+
+    def list_all(
+        self,
+        event_type: str | None = None,
+        start_date_gte: str | None = None,
+        start_date_lte: str | None = None,
+        entity_id: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        """List events with optional filters."""
+        q = select(events)
+        if event_type:
+            q = q.where(events.c.event_type == event_type)
+        if start_date_gte:
+            q = q.where(events.c.start_date >= start_date_gte)
+        if start_date_lte:
+            q = q.where(events.c.start_date <= start_date_lte)
+        if entity_id:
+            subq = select(event_participants.c.event_id).where(
+                event_participants.c.entity_id == entity_id
+            )
+            q = q.where(events.c.id.in_(subq))
+        q = q.limit(limit).offset(offset)
+        rows = self._conn.execute(q).mappings().all()
+        result = []
+        for row in rows:
+            r = dict(row)
+            r["attributes"] = json.loads(r.get("attributes") or "{}")
+            result.append(r)
+        return result
+
+    def get_timeline(
+        self,
+        entity_id: str | None = None,
+        event_type: str | None = None,
+        start_date_gte: str | None = None,
+        start_date_lte: str | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        """
+        Return EventSummary-shaped rows ordered chronologically.
+        Undated events (start_date IS NULL) are sorted last.
+        """
+        participant_count_subq = (
+            select(func.count())
+            .where(event_participants.c.event_id == events.c.id)
+            .correlate(events)
+            .scalar_subquery()
+            .label("participant_count")
+        )
+        q = select(
+            events.c.id,
+            events.c.title,
+            events.c.event_type,
+            events.c.start_date,
+            events.c.end_date,
+            participant_count_subq,
+        )
+        if event_type:
+            q = q.where(events.c.event_type == event_type)
+        if start_date_gte:
+            q = q.where(events.c.start_date >= start_date_gte)
+        if start_date_lte:
+            q = q.where(events.c.start_date <= start_date_lte)
+        if entity_id:
+            subq = select(event_participants.c.event_id).where(
+                event_participants.c.entity_id == entity_id
+            )
+            q = q.where(events.c.id.in_(subq))
+        # NULLs last: dated events first, then undated
+        q = q.order_by(
+            events.c.start_date.is_(None),
+            events.c.start_date.asc(),
+        ).limit(limit)
+        rows = self._conn.execute(q).mappings().all()
+        return [dict(r) for r in rows]
+
+    def delete(self, event_id: str) -> None:
+        """Hard-delete an event and its participant/source links."""
+        self._conn.execute(
+            event_source_documents.delete().where(
+                event_source_documents.c.event_id == event_id
+            )
+        )
+        self._conn.execute(
+            event_participants.delete().where(
+                event_participants.c.event_id == event_id
+            )
+        )
+        self._conn.execute(events.delete().where(events.c.id == event_id))

@@ -8,7 +8,7 @@ import pytest
 from sqlalchemy.engine import Connection
 
 from kn0.persistence.database import create_db_engine, init_db
-from kn0.persistence.store import DocumentStore, EntityStore, RelationshipStore
+from kn0.persistence.store import DocumentStore, EntityStore, EventStore, RelationshipStore
 
 
 @pytest.fixture
@@ -40,6 +40,11 @@ def entity_store(db_conn) -> EntityStore:
 @pytest.fixture
 def rel_store(db_conn) -> RelationshipStore:
     return RelationshipStore(db_conn)
+
+
+@pytest.fixture
+def event_store(db_conn) -> EventStore:
+    return EventStore(db_conn)
 
 
 @pytest.fixture

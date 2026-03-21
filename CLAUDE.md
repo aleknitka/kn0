@@ -4,7 +4,7 @@ This document provides guidance for AI assistants (Claude and others) working on
 
 ## Repository Overview
 
-**kn0** is a Python-based Entity & Relationship Extraction Engine that transforms unstructured documents into a structured, queryable knowledge graph with interactive network visualization.
+**kn0** is a Python-based open-source knowledge graph inspired by Palantir Gotham. It transforms unstructured documents into a structured, queryable knowledge graph — extracting entities, relationships, and events — with interactive network visualization.
 
 - **Language**: Python 3.10+
 - **License**: MIT
@@ -21,13 +21,21 @@ kn0/
 ├── alembic/
 │   ├── env.py                     # Migration environment (reads kn0 settings)
 │   └── versions/
-│       └── 001_initial_schema.py  # Initial DB schema migration
+│       ├── 001_initial_schema.py  # Initial DB schema migration
+│       └── 002_add_events.py      # Events, event_participants, event_source_documents
 ├── src/
 │   └── kn0/
 │       ├── __init__.py
 │       ├── config.py              # pydantic-settings: reads from .env
-│       ├── cli.py                 # Typer CLI (kn0 ingest, kn0 entities, …)
+│       ├── cli.py                 # Typer CLI (kn0 ingest, kn0 entities, kn0 events, …)
 │       ├── pipeline.py            # End-to-end ingestion pipeline
+│       ├── schemas/               # Pydantic v2 validation & serialization schemas
+│       │   ├── __init__.py        # Re-exports all public schemas
+│       │   ├── common.py          # KnOBaseModel shared base
+│       │   ├── entity.py          # EntityCreate, EntityRead, EntitySummary
+│       │   ├── relationship.py    # RelationshipCreate, RelationshipRead
+│       │   ├── event.py           # EventCreate, EventRead, EventSummary, ParticipantRead
+│       │   └── document.py        # DocumentRead
 │       ├── ingestion/
 │       │   ├── base.py            # DocumentParser ABC, ParsedDocument, PageContent
 │       │   ├── registry.py        # ParserRegistry (MIME → parser)
@@ -36,13 +44,14 @@ kn0/
 │       ├── extraction/
 │       │   ├── base.py            # ExtractionBackend Protocol, dataclasses
 │       │   ├── entity_types.py    # EntityType enum + spaCy label map
+│       │   ├── type_registry.py   # TypeRegistry class + entity/relationship/event singletons
 │       │   ├── spacy_backend.py   # spaCy NER + co-occurrence RE
 │       │   ├── resolver.py        # Entity resolution (exact/alias/similarity)
 │       │   └── confidence.py      # Confidence scoring formula
 │       ├── persistence/
-│       │   ├── models.py          # SQLAlchemy Core table definitions (5 tables)
+│       │   ├── models.py          # SQLAlchemy Core table definitions (8 tables)
 │       │   ├── database.py        # Engine factory, init_db, get_connection()
-│       │   └── store.py           # DocumentStore, EntityStore, RelationshipStore
+│       │   └── store.py           # DocumentStore, EntityStore, RelationshipStore, EventStore
 │       ├── api/                   # FastAPI (Phase 2 — not yet implemented)
 │       └── visualization/         # Pyvis/NetworkX (Phase 3 — not yet implemented)
 └── tests/
@@ -112,7 +121,7 @@ File → ParserRegistry → DocumentParser → ParsedDocument
      → EntityStore / RelationshipStore → SQLite
 ```
 
-### Database Schema (5 tables)
+### Database Schema (8 tables)
 
 | Table | Purpose |
 |---|---|
@@ -121,8 +130,22 @@ File → ParserRegistry → DocumentParser → ParsedDocument
 | `relationships` | Directed edges (source → target) with confidence score |
 | `entity_mentions` | Provenance: entity ↔ document/page/passage |
 | `relationship_evidence` | Provenance: relationship ↔ document/page/passage |
+| `events` | First-class event objects with date range and location anchor |
+| `event_participants` | Many-to-many: entity participates in event with a role |
+| `event_source_documents` | Provenance: event ↔ document with per-source confidence |
 
 Plus FTS5 virtual table `entities_fts` for full-text entity search.
+
+### Type Registry
+
+`TypeRegistry` in `src/kn0/extraction/type_registry.py` provides extensible, case-insensitive type validation without modifying the `EntityType` enum:
+
+```python
+from kn0.extraction.type_registry import entity_type_registry
+entity_type_registry.register("VEHICLE")
+```
+
+Three module-level singletons are pre-seeded: `entity_type_registry` (from `EntityType` enum), `relationship_type_registry` (11 default types), `event_type_registry` (15 default types). Pydantic schemas validate against these registries at model construction time.
 
 ### Confidence Scoring
 
@@ -177,6 +200,7 @@ When working on this repository:
 | Phase | Status | Description |
 |---|---|---|
 | 1 — Foundation | ✅ Complete | Scaffold, DB schema, PDF/text ingestion, NER, entity resolution, confidence scoring, CLI |
-| 2 — Relationships | Planned | Full RE pipeline, FastAPI REST API (`src/kn0/api/`) |
+| 1.5 — Schemas & Events | ✅ Complete | Pydantic v2 schemas, extensible type registry, events/timeline subsystem (`events`, `event_participants`, `event_source_documents`), `kn0 events` + `kn0 timeline` CLI |
+| 2 — REST API | Planned | Full RE pipeline, FastAPI REST API (`src/kn0/api/`) |
 | 3 — Visualization | Planned | Interactive network graph via Pyvis/D3.js (`src/kn0/visualization/`) |
 | 4 — Polish | Planned | DOCX/HTML/CSV parsers, pluggable NLP backends, Docker image |

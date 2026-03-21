@@ -13,6 +13,7 @@ from sqlalchemy import (
     text,
 )
 
+
 metadata = MetaData()
 
 documents = Table(
@@ -113,4 +114,49 @@ relationship_evidence = Table(
     Column("created_at", Text, nullable=False),
     Index("ix_rel_evidence_relationship", "relationship_id"),
     Index("ix_rel_evidence_document", "document_id"),
+)
+
+events = Table(
+    "events",
+    metadata,
+    Column("id", String(36), primary_key=True),
+    Column("title", Text, nullable=False),
+    Column("event_type", String(50), nullable=False),
+    Column("description", Text),
+    Column("start_date", Text),           # ISO 8601 "YYYY-MM-DD"; NULL = undated
+    Column("end_date", Text),             # NULL = point-in-time event
+    Column("location_entity_id", String(36), ForeignKey("entities.id")),
+    Column("attributes", Text, nullable=False, server_default="{}"),
+    Column("created_at", Text, nullable=False),
+    Column("updated_at", Text, nullable=False),
+    Index("ix_events_type", "event_type"),
+    Index("ix_events_start_date", "start_date"),
+    Index("ix_events_location", "location_entity_id"),
+)
+
+event_participants = Table(
+    "event_participants",
+    metadata,
+    Column("id", String(36), primary_key=True),
+    Column("event_id", String(36), ForeignKey("events.id"), nullable=False),
+    Column("entity_id", String(36), ForeignKey("entities.id"), nullable=False),
+    Column("role", Text),
+    Column("created_at", Text, nullable=False),
+    Index("ix_ep_event", "event_id"),
+    Index("ix_ep_entity", "entity_id"),
+    Index("ix_ep_unique", "event_id", "entity_id", "role", unique=True),
+)
+
+event_source_documents = Table(
+    "event_source_documents",
+    metadata,
+    Column("id", String(36), primary_key=True),
+    Column("event_id", String(36), ForeignKey("events.id"), nullable=False),
+    Column("document_id", String(36), ForeignKey("documents.id"), nullable=False),
+    Column("passage_text", Text),
+    Column("confidence", Float, nullable=False, server_default=text("0.5")),
+    Column("created_at", Text, nullable=False),
+    Index("ix_esd_event", "event_id"),
+    Index("ix_esd_document", "document_id"),
+    Index("ix_esd_unique", "event_id", "document_id", unique=True),
 )

@@ -170,12 +170,13 @@ def relationships(
 def status() -> None:
     """Show knowledge graph statistics."""
     from sqlalchemy import func, select
-    from kn0.persistence.models import documents, entities, relationships
+    from kn0.persistence.models import documents, entities, events, relationships
 
     with _get_conn() as conn:
         doc_count = conn.execute(select(func.count()).select_from(documents)).scalar()
         entity_count = conn.execute(select(func.count()).select_from(entities)).scalar()
         rel_count = conn.execute(select(func.count()).select_from(relationships)).scalar()
+        event_count = conn.execute(select(func.count()).select_from(events)).scalar()
 
     table = Table(title="kn0 Knowledge Graph Status")
     table.add_column("Metric")
@@ -184,6 +185,7 @@ def status() -> None:
     table.add_row("Documents ingested", str(doc_count))
     table.add_row("Entities", str(entity_count))
     table.add_row("Relationships", str(rel_count))
+    table.add_row("Events", str(event_count))
 
     console.print(table)
 
@@ -223,6 +225,131 @@ def documents() -> None:
         )
 
     console.print(table)
+
+
+# ---------------------------------------------------------------------------
+# kn0 events
+# ---------------------------------------------------------------------------
+
+
+@app.command()
+def events(
+    event_type: Optional[str] = typer.Option(
+        None, "--type", "-t", help="Filter by event type (MEETING, CONFLICT, …)"
+    ),
+    entity: Optional[str] = typer.Option(
+        None, "--entity", "-e", help="Filter by entity ID (shows events they participated in)"
+    ),
+    after: Optional[str] = typer.Option(None, "--after", help="Show events starting on/after ISO date"),
+    before: Optional[str] = typer.Option(None, "--before", help="Show events starting on/before ISO date"),
+    limit: int = typer.Option(20, "--limit", "-n", help="Maximum number of results"),
+) -> None:
+    """List events in the knowledge graph."""
+    from kn0.persistence.store import EventStore
+
+    with _get_conn() as conn:
+        store = EventStore(conn)
+        rows = store.list_all(
+            event_type=event_type,
+            entity_id=entity,
+            start_date_gte=after,
+            start_date_lte=before,
+            limit=limit,
+        )
+        # Fetch participant counts separately
+        from sqlalchemy import func, select
+        from kn0.persistence.models import event_participants as ep_table
+        counts: dict[str, int] = {}
+        if rows:
+            event_ids = [r["id"] for r in rows]
+            count_rows = conn.execute(
+                select(ep_table.c.event_id, func.count().label("cnt"))
+                .where(ep_table.c.event_id.in_(event_ids))
+                .group_by(ep_table.c.event_id)
+            ).mappings().all()
+            counts = {r["event_id"]: r["cnt"] for r in count_rows}
+
+    if not rows:
+        console.print("[yellow]No events found.[/yellow]")
+        return
+
+    table = Table(title=f"Events ({len(rows)} shown)")
+    table.add_column("ID", style="dim", max_width=8)
+    table.add_column("Type", style="cyan")
+    table.add_column("Title", style="bold")
+    table.add_column("Start Date")
+    table.add_column("End Date", style="dim")
+    table.add_column("Participants", justify="right")
+
+    for row in rows:
+        table.add_row(
+            row["id"][:8],
+            row["event_type"],
+            row["title"],
+            row.get("start_date") or "—",
+            row.get("end_date") or "—",
+            str(counts.get(row["id"], 0)),
+        )
+
+    console.print(table)
+
+
+# ---------------------------------------------------------------------------
+# kn0 timeline
+# ---------------------------------------------------------------------------
+
+
+@app.command()
+def timeline(
+    entity: Optional[str] = typer.Option(
+        None, "--entity", "-e", help="Filter by entity ID (shows events they participated in)"
+    ),
+    event_type: Optional[str] = typer.Option(None, "--type", "-t", help="Filter by event type"),
+    after: Optional[str] = typer.Option(None, "--after", help="Show events starting on/after ISO date"),
+    before: Optional[str] = typer.Option(None, "--before", help="Show events starting on/before ISO date"),
+    limit: int = typer.Option(50, "--limit", "-n", help="Maximum number of results"),
+) -> None:
+    """Display a chronological timeline of events."""
+    from kn0.persistence.store import EventStore
+
+    with _get_conn() as conn:
+        store = EventStore(conn)
+        rows = store.get_timeline(
+            entity_id=entity,
+            event_type=event_type,
+            start_date_gte=after,
+            start_date_lte=before,
+            limit=limit,
+        )
+
+    if not rows:
+        console.print("[yellow]No events found.[/yellow]")
+        return
+
+    dated = [r for r in rows if r.get("start_date")]
+    undated = [r for r in rows if not r.get("start_date")]
+
+    def _render_section(section_rows: list[dict], title: str) -> None:
+        tbl = Table(title=title)
+        tbl.add_column("Start", style="cyan", min_width=10)
+        tbl.add_column("End", style="dim", min_width=10)
+        tbl.add_column("Type")
+        tbl.add_column("Title", style="bold")
+        tbl.add_column("Participants", justify="right")
+        for row in section_rows:
+            tbl.add_row(
+                row.get("start_date") or "—",
+                row.get("end_date") or "—",
+                row["event_type"],
+                row["title"],
+                str(row.get("participant_count", 0)),
+            )
+        console.print(tbl)
+
+    if dated:
+        _render_section(dated, f"Timeline ({len(dated)} dated event{'s' if len(dated) != 1 else ''})")
+    if undated:
+        _render_section(undated, f"Undated Events ({len(undated)})")
 
 
 if __name__ == "__main__":
