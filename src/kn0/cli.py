@@ -388,5 +388,27 @@ def ask(
     )
 
 
+# ---------------------------------------------------------------------------
+# kn0 serve  — start the web dashboard
+# ---------------------------------------------------------------------------
+
+
+@app.command()
+def serve(
+    host: str = typer.Option("127.0.0.1", "--host", help="Bind host"),
+    port: int = typer.Option(8000, "--port", "-p", help="Bind port"),
+    reload: bool = typer.Option(False, "--reload", help="Enable auto-reload (dev mode)"),
+) -> None:
+    """Start the kn0 web dashboard."""
+    import uvicorn
+    console.print(f"[cyan]Starting kn0 web dashboard[/cyan] → http://{host}:{port}")
+    uvicorn.run(
+        "kn0.api.app:app",
+        host=host,
+        port=port,
+        reload=reload,
+    )
+
+
 if __name__ == "__main__":
     app()
