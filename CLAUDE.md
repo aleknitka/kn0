@@ -4,7 +4,7 @@ This document provides guidance for AI assistants (Claude and others) working on
 
 ## Repository Overview
 
-**kn0** is a Python-based open-source knowledge graph inspired by Palantir Gotham. It transforms unstructured documents into a structured, queryable knowledge graph — extracting entities, relationships, and events — with interactive network visualization.
+**kn0** is a Python-based open-source structured intelligence knowledge graph. It transforms unstructured documents into a structured, queryable knowledge graph — extracting entities, relationships, and events — with LLM-powered analysis, GraphRAG querying, and interactive network visualization.
 
 - **Language**: Python 3.10+
 - **License**: MIT
@@ -48,6 +48,14 @@ kn0/
 │       │   ├── spacy_backend.py   # spaCy NER + co-occurrence RE
 │       │   ├── resolver.py        # Entity resolution (exact/alias/similarity)
 │       │   └── confidence.py      # Confidence scoring formula
+│       ├── llm/                   # LLM integration (extraction + future GraphRAG)
+│       │   ├── __init__.py        # Re-exports LLMClient, LLMExtractionBackend
+│       │   ├── client.py          # Async LLMClient (OpenAI-compatible + Anthropic)
+│       │   ├── prompts.py         # Entity + relationship extraction prompt templates
+│       │   └── extraction_backend.py  # LLMExtractionBackend (ExtractionBackend Protocol)
+│       ├── graphrag/              # GraphRAG engine (Phase 2+)
+│       │   ├── __init__.py
+│       │   └── engine.py          # GraphRAGEngine scaffold (async interface)
 │       ├── persistence/
 │       │   ├── models.py          # SQLAlchemy Core table definitions (8 tables)
 │       │   ├── database.py        # Engine factory, init_db, get_connection()
@@ -165,7 +173,25 @@ final = 0.40 × extraction_confidence
 
 ### Pluggable NLP Backend
 
-`ExtractionBackend` is defined as a `Protocol` in `src/kn0/extraction/base.py`. To add a new backend (e.g., Hugging Face), implement `extract_entities()` and `extract_relationships()` and pass it to `ingest_document(..., backend=your_backend)`.
+`ExtractionBackend` is defined as a `Protocol` in `src/kn0/extraction/base.py`. Two backends are included:
+- **`SpacyBackend`** (default) — fast, offline NER via spaCy
+- **`LLMExtractionBackend`** — LLM-powered extraction via `kn0 ingest --backend llm`
+
+To use a custom backend, implement `extract_entities()` and `extract_relationships()` and pass it to `ingest_document(..., backend=your_backend)`.
+
+### LLM Client (`src/kn0/llm/client.py`)
+
+`LLMClient` is an **async** wrapper supporting:
+- `lm_studio` — `http://localhost:1234/v1` (default, OpenAI-compatible)
+- `ollama` — `http://localhost:11434/v1` (OpenAI-compatible)
+- `openai` — `https://api.openai.com/v1`
+- `anthropic` — requires `pip install 'kn0[anthropic]'`
+
+All methods are `async def`. The sync `ExtractionBackend` Protocol is satisfied by thin `asyncio.run()` wrappers, making the backend directly usable from async callers (Phase 2 API) without change.
+
+### GraphRAG (`src/kn0/graphrag/engine.py`)
+
+`GraphRAGEngine` is scaffolded with an async interface for graph-grounded LLM Q&A and entity summarisation. Not yet implemented — placeholder `NotImplementedError` methods are in place for Phase 2.
 
 ## Configuration (`config.py`)
 
@@ -180,6 +206,12 @@ All settings read from environment / `.env` via `pydantic-settings`:
 | `REVIEW_THRESHOLD` | `0.65` | Ambiguous match threshold |
 | `MIN_CONFIDENCE_DISPLAY` | `0.3` | Hide relationships below this score |
 | `SOURCE_RELIABILITY_DEFAULT` | `0.5` | Default source weight |
+| `LLM_PROVIDER` | `lm_studio` | LLM provider: `lm_studio`, `ollama`, `openai`, `anthropic` |
+| `LLM_MODEL` | `local-model` | Model name (e.g. `llama3.2`, `gpt-4o-mini`) |
+| `LLM_BASE_URL` | `http://localhost:1234/v1` | LM Studio default endpoint |
+| `LLM_API_KEY` | `lm-studio` | Dummy key for local providers; real key for OpenAI/Anthropic |
+| `LLM_TEMPERATURE` | `0.0` | Sampling temperature (0.0 for deterministic extraction) |
+| `LLM_TIMEOUT` | `60.0` | Request timeout in seconds |
 
 ## AI Assistant Instructions
 
@@ -201,6 +233,7 @@ When working on this repository:
 |---|---|---|
 | 1 — Foundation | ✅ Complete | Scaffold, DB schema, PDF/text ingestion, NER, entity resolution, confidence scoring, CLI |
 | 1.5 — Schemas & Events | ✅ Complete | Pydantic v2 schemas, extensible type registry, events/timeline subsystem (`events`, `event_participants`, `event_source_documents`), `kn0 events` + `kn0 timeline` CLI |
-| 2 — REST API | Planned | Full RE pipeline, FastAPI REST API (`src/kn0/api/`) |
+| 1.7 — LLM Backend | ✅ Complete | Async `LLMClient` (LM Studio/Ollama/OpenAI/Anthropic), `LLMExtractionBackend`, `kn0 ingest --backend llm`, GraphRAG scaffold |
+| 2 — REST API & GraphRAG | Planned | FastAPI REST API (`src/kn0/api/`), full GraphRAG Q&A, entity summarisation |
 | 3 — Visualization | Planned | Interactive network graph via Pyvis/D3.js (`src/kn0/visualization/`) |
-| 4 — Polish | Planned | DOCX/HTML/CSV parsers, pluggable NLP backends, Docker image |
+| 4 — Polish | Planned | DOCX/HTML/CSV parsers, Docker image, Hugging Face backend option |

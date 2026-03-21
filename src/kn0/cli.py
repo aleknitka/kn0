@@ -37,18 +37,35 @@ def ingest(
     source_reliability: float = typer.Option(
         0.5, "--reliability", "-r", help="Source reliability weight [0–1]"
     ),
+    backend: str = typer.Option(
+        "spacy", "--backend", "-b", help="Extraction backend: spacy | llm"
+    ),
 ) -> None:
     """Parse a document and extract entities and relationships into the knowledge graph."""
     if not file.exists():
         err_console.print(f"File not found: {file}")
         raise typer.Exit(1)
 
+    if backend not in ("spacy", "llm"):
+        err_console.print(f"Unknown backend {backend!r}. Choose: spacy, llm")
+        raise typer.Exit(1)
+
     from kn0.pipeline import ingest_document
 
-    console.print(f"[cyan]Ingesting[/cyan] {file.name} ...")
+    extraction_backend = None
+    if backend == "llm":
+        from kn0.llm import get_llm_backend
+        extraction_backend = get_llm_backend()
+        console.print(f"[cyan]Ingesting[/cyan] {file.name} [dim](backend: llm)[/dim] ...")
+    else:
+        console.print(f"[cyan]Ingesting[/cyan] {file.name} ...")
 
     with _get_conn() as conn:
-        result = ingest_document(file, conn, source_reliability=source_reliability)
+        result = ingest_document(
+            file, conn,
+            backend=extraction_backend,
+            source_reliability=source_reliability,
+        )
 
     if result.was_duplicate:
         console.print(f"[yellow]Already ingested[/yellow] (document id: {result.document_id})")
@@ -350,6 +367,25 @@ def timeline(
         _render_section(dated, f"Timeline ({len(dated)} dated event{'s' if len(dated) != 1 else ''})")
     if undated:
         _render_section(undated, f"Undated Events ({len(undated)})")
+
+
+# ---------------------------------------------------------------------------
+# kn0 ask  (GraphRAG stub — will be fully implemented in Phase 2)
+# ---------------------------------------------------------------------------
+
+
+@app.command()
+def ask(
+    question: str = typer.Argument(..., help="Question to answer using the knowledge graph"),
+) -> None:
+    """Ask a question answered by the knowledge graph (GraphRAG — coming soon)."""
+    console.print(
+        "[yellow]GraphRAG query is not yet fully implemented.[/yellow]\n"
+        "In the meantime, try:\n"
+        "  [cyan]kn0 entities --search[/cyan] <term>\n"
+        "  [cyan]kn0 relationships[/cyan]\n"
+        "  [cyan]kn0 timeline[/cyan]"
+    )
 
 
 if __name__ == "__main__":

@@ -12,7 +12,8 @@ from kn0.config import settings
 from kn0.extraction.base import ExtractedEntity, ExtractedRelationship
 from kn0.extraction.confidence import compute_confidence, recalculate_from_evidence
 from kn0.extraction.resolver import ResolutionOutcome, resolve_entity
-from kn0.extraction.spacy_backend import SpacyBackend, get_default_backend
+from kn0.extraction.base import ExtractionBackend
+from kn0.extraction.spacy_backend import get_default_backend
 from kn0.ingestion.registry import ParserRegistry, default_registry
 from kn0.persistence.store import DocumentStore, EntityStore, RelationshipStore
 
@@ -37,7 +38,7 @@ def ingest_document(
     conn: Connection,
     *,
     registry: ParserRegistry | None = None,
-    backend: SpacyBackend | None = None,
+    backend: ExtractionBackend | None = None,
     source_reliability: float | None = None,
 ) -> IngestionResult:
     """
