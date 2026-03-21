@@ -1,0 +1,229 @@
+"""kn0 CLI — command-line interface for document ingestion and knowledge graph queries."""
+
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+from typing import Optional
+
+import typer
+from rich.console import Console
+from rich.table import Table
+
+app = typer.Typer(
+    name="kn0",
+    help="Entity & Relationship Extraction Engine — Knowledge Graph Builder",
+    add_completion=False,
+)
+console = Console()
+err_console = Console(stderr=True, style="bold red")
+
+
+def _get_conn():
+    """Get a database connection, initializing DB if needed."""
+    from kn0.persistence.database import get_connection
+    return get_connection()
+
+
+# ---------------------------------------------------------------------------
+# kn0 ingest <file>
+# ---------------------------------------------------------------------------
+
+
+@app.command()
+def ingest(
+    file: Path = typer.Argument(..., help="Path to the document to ingest"),
+    source_reliability: float = typer.Option(
+        0.5, "--reliability", "-r", help="Source reliability weight [0–1]"
+    ),
+) -> None:
+    """Parse a document and extract entities and relationships into the knowledge graph."""
+    if not file.exists():
+        err_console.print(f"File not found: {file}")
+        raise typer.Exit(1)
+
+    from kn0.pipeline import ingest_document
+
+    console.print(f"[cyan]Ingesting[/cyan] {file.name} ...")
+
+    with _get_conn() as conn:
+        result = ingest_document(file, conn, source_reliability=source_reliability)
+
+    if result.was_duplicate:
+        console.print(f"[yellow]Already ingested[/yellow] (document id: {result.document_id})")
+        return
+
+    if result.error:
+        err_console.print(f"Ingestion failed: {result.error}")
+        raise typer.Exit(1)
+
+    console.print(f"[green]Done![/green] Document id: {result.document_id}")
+    console.print(f"  Pages processed : {result.pages_processed}")
+    console.print(f"  Entities created: {result.entities_created}")
+    console.print(f"  Entities merged : {result.entities_merged}")
+    console.print(f"  Relationships   : {result.relationships_created} new, {result.relationships_updated} updated")
+
+
+# ---------------------------------------------------------------------------
+# kn0 entities
+# ---------------------------------------------------------------------------
+
+
+@app.command()
+def entities(
+    entity_type: Optional[str] = typer.Option(
+        None, "--type", "-t", help="Filter by entity type (PERSON, ORGANIZATION, …)"
+    ),
+    limit: int = typer.Option(20, "--limit", "-n", help="Maximum number of results"),
+    search: Optional[str] = typer.Option(None, "--search", "-s", help="Search by name"),
+) -> None:
+    """List entities stored in the knowledge graph."""
+    from kn0.persistence.store import EntityStore
+
+    with _get_conn() as conn:
+        store = EntityStore(conn)
+        if search:
+            rows = store.search_fts(search, limit=limit)
+        else:
+            rows = store.list_all(entity_type=entity_type, limit=limit)
+
+    if not rows:
+        console.print("[yellow]No entities found.[/yellow]")
+        return
+
+    table = Table(title=f"Entities ({len(rows)} shown)")
+    table.add_column("ID", style="dim", max_width=8)
+    table.add_column("Type", style="cyan")
+    table.add_column("Name", style="bold")
+    table.add_column("Mentions", justify="right")
+    table.add_column("Aliases", style="dim")
+
+    for row in rows:
+        aliases = json.loads(row.get("aliases") or "[]")
+        table.add_row(
+            row["id"][:8],
+            row["entity_type"],
+            row["canonical_name"],
+            str(row.get("mention_count", 0)),
+            ", ".join(aliases[:3]) + ("…" if len(aliases) > 3 else ""),
+        )
+
+    console.print(table)
+
+
+# ---------------------------------------------------------------------------
+# kn0 relationships
+# ---------------------------------------------------------------------------
+
+
+@app.command()
+def relationships(
+    rel_type: Optional[str] = typer.Option(None, "--type", "-t", help="Filter by relationship type"),
+    min_confidence: float = typer.Option(0.0, "--min-confidence", "-c", help="Minimum confidence"),
+    limit: int = typer.Option(20, "--limit", "-n", help="Maximum number of results"),
+) -> None:
+    """List relationships stored in the knowledge graph."""
+    from kn0.persistence.store import RelationshipStore
+
+    with _get_conn() as conn:
+        store = RelationshipStore(conn)
+        rows = store.list_all(
+            relationship_type=rel_type,
+            min_confidence=min_confidence if min_confidence > 0 else None,
+            limit=limit,
+        )
+
+    if not rows:
+        console.print("[yellow]No relationships found.[/yellow]")
+        return
+
+    table = Table(title=f"Relationships ({len(rows)} shown)")
+    table.add_column("ID", style="dim", max_width=8)
+    table.add_column("Type", style="cyan")
+    table.add_column("Source", max_width=20)
+    table.add_column("Target", max_width=20)
+    table.add_column("Confidence", justify="right")
+    table.add_column("Status")
+
+    for row in rows:
+        conf = row.get("confidence_score", 0.0)
+        conf_style = "green" if conf >= 0.7 else ("yellow" if conf >= 0.4 else "red")
+        table.add_row(
+            row["id"][:8],
+            row["relationship_type"],
+            row["source_entity_id"][:8],
+            row["target_entity_id"][:8],
+            f"[{conf_style}]{conf:.2f}[/{conf_style}]",
+            row.get("status", ""),
+        )
+
+    console.print(table)
+
+
+# ---------------------------------------------------------------------------
+# kn0 status
+# ---------------------------------------------------------------------------
+
+
+@app.command()
+def status() -> None:
+    """Show knowledge graph statistics."""
+    from sqlalchemy import func, select
+    from kn0.persistence.models import documents, entities, relationships
+
+    with _get_conn() as conn:
+        doc_count = conn.execute(select(func.count()).select_from(documents)).scalar()
+        entity_count = conn.execute(select(func.count()).select_from(entities)).scalar()
+        rel_count = conn.execute(select(func.count()).select_from(relationships)).scalar()
+
+    table = Table(title="kn0 Knowledge Graph Status")
+    table.add_column("Metric")
+    table.add_column("Count", justify="right", style="bold")
+
+    table.add_row("Documents ingested", str(doc_count))
+    table.add_row("Entities", str(entity_count))
+    table.add_row("Relationships", str(rel_count))
+
+    console.print(table)
+
+
+# ---------------------------------------------------------------------------
+# kn0 documents
+# ---------------------------------------------------------------------------
+
+
+@app.command()
+def documents() -> None:
+    """List all ingested documents."""
+    from kn0.persistence.store import DocumentStore
+
+    with _get_conn() as conn:
+        store = DocumentStore(conn)
+        rows = store.list_all()
+
+    if not rows:
+        console.print("[yellow]No documents ingested yet.[/yellow]")
+        return
+
+    table = Table(title=f"Documents ({len(rows)})")
+    table.add_column("ID", style="dim", max_width=8)
+    table.add_column("Filename")
+    table.add_column("Status", style="cyan")
+    table.add_column("Pages", justify="right")
+    table.add_column("Ingested at", style="dim")
+
+    for row in rows:
+        table.add_row(
+            row["id"][:8],
+            row["filename"],
+            row["status"],
+            str(row.get("page_count") or "—"),
+            (row.get("created_at") or "")[:19],
+        )
+
+    console.print(table)
+
+
+if __name__ == "__main__":
+    app()

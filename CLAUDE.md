@@ -4,42 +4,62 @@ This document provides guidance for AI assistants (Claude and others) working on
 
 ## Repository Overview
 
-**kn0** is a Python project currently in its initial setup phase. The repository was initialized with a standard Python `.gitignore`, MIT license, and minimal README. Source code and configuration files are expected to be added as the project develops.
+**kn0** is a Python-based Entity & Relationship Extraction Engine that transforms unstructured documents into a structured, queryable knowledge graph with interactive network visualization.
 
-- **Language**: Python
+- **Language**: Python 3.10+
 - **License**: MIT
 - **Owner**: aleknitka
+- **Package manager**: pip / uv (uses `pyproject.toml`)
 
 ## Repository Structure
 
 ```
 kn0/
-├── .gitignore       # Comprehensive Python project gitignore
-├── LICENSE          # MIT License
-├── README.md        # Project readme (minimal, to be expanded)
-└── CLAUDE.md        # This file
+├── pyproject.toml                 # Package config, all deps, ruff/mypy config
+├── .env.example                   # Template for environment variables
+├── alembic.ini                    # Alembic migration tool config
+├── alembic/
+│   ├── env.py                     # Migration environment (reads kn0 settings)
+│   └── versions/
+│       └── 001_initial_schema.py  # Initial DB schema migration
+├── src/
+│   └── kn0/
+│       ├── __init__.py
+│       ├── config.py              # pydantic-settings: reads from .env
+│       ├── cli.py                 # Typer CLI (kn0 ingest, kn0 entities, …)
+│       ├── pipeline.py            # End-to-end ingestion pipeline
+│       ├── ingestion/
+│       │   ├── base.py            # DocumentParser ABC, ParsedDocument, PageContent
+│       │   ├── registry.py        # ParserRegistry (MIME → parser)
+│       │   ├── pdf_parser.py      # PyMuPDF extraction + OCR stub
+│       │   └── text_parser.py     # Plain text / Markdown pseudo-paging
+│       ├── extraction/
+│       │   ├── base.py            # ExtractionBackend Protocol, dataclasses
+│       │   ├── entity_types.py    # EntityType enum + spaCy label map
+│       │   ├── spacy_backend.py   # spaCy NER + co-occurrence RE
+│       │   ├── resolver.py        # Entity resolution (exact/alias/similarity)
+│       │   └── confidence.py      # Confidence scoring formula
+│       ├── persistence/
+│       │   ├── models.py          # SQLAlchemy Core table definitions (5 tables)
+│       │   ├── database.py        # Engine factory, init_db, get_connection()
+│       │   └── store.py           # DocumentStore, EntityStore, RelationshipStore
+│       ├── api/                   # FastAPI (Phase 2 — not yet implemented)
+│       └── visualization/         # Pyvis/NetworkX (Phase 3 — not yet implemented)
+└── tests/
+    ├── conftest.py                # In-memory DB fixtures
+    ├── fixtures/
+    │   └── sample.txt             # Sample document for integration tests
+    ├── ingestion/
+    ├── extraction/
+    └── persistence/
 ```
-
-As the project evolves, expect additions like:
-- `src/` or package directory for source code
-- `tests/` for test files
-- `pyproject.toml` / `setup.py` / `requirements.txt` for dependencies
-- `.env` for environment variables (never commit this)
-- `docs/` for documentation
 
 ## Git Workflow
 
 ### Branches
 
-- `main` — stable, production-ready code
-- `master` — may be used interchangeably with `main` in this repo
-- `claude/<description>-<id>` — AI-generated feature branches (e.g., `claude/add-claude-documentation-694lO`)
-
-### Branch Conventions
-
-- Feature branches follow the pattern: `claude/<short-description>-<session-id>`
-- Always develop on the designated feature branch; never push directly to `main`/`master`
-- Use descriptive commit messages that explain *why*, not just *what*
+- `main` / `master` — stable, production-ready code
+- `claude/<description>-<id>` — AI-generated feature branches
 
 ### Commit Messages
 
@@ -47,7 +67,6 @@ Write clear, imperative commit messages:
 ```
 Add user authentication module
 Fix pagination bug in search results
-Update dependencies to resolve security vulnerabilities
 ```
 
 ### Push Commands
@@ -56,70 +75,88 @@ Update dependencies to resolve security vulnerabilities
 git push -u origin <branch-name>
 ```
 
-## Python Development Conventions
+## Development Setup
 
-### Package Management
-
-This project may use any of the following (check for lockfiles to determine which is active):
-- **uv** — modern, fast package manager (`uv.lock`)
-- **Poetry** — dependency management (`poetry.lock`, `pyproject.toml`)
-- **PDM** — PEP 517-compliant (`pdm.lock`)
-- **pip** — fallback (`requirements.txt`)
-
-When a lockfile is present, always install from it for reproducibility.
-
-### Code Style
-
-Based on the gitignore, the following tools are expected:
-- **Ruff** — linting and formatting (check for `ruff.toml` or `[tool.ruff]` in `pyproject.toml`)
-- **MyPy** — static type checking (check for `mypy.ini` or `[tool.mypy]` in `pyproject.toml`)
-
-Run linting before committing:
 ```bash
+# Install package + dev dependencies
+pip install -e ".[dev]"
+# or
+uv sync
+
+# Download spaCy model (required for extraction)
+python -m spacy download en_core_web_sm
+
+# Initialize/migrate database
+alembic upgrade head
+
+# Run tests
+pytest
+
+# Lint and format
 ruff check .
 ruff format .
-mypy .
+
+# Type check
+mypy src/
 ```
 
-### Testing
+## Architecture Notes
 
-Expected testing setup:
-- **pytest** — primary test runner
-- **tox** or **nox** — multi-environment testing
+### Pipeline Flow
 
-Run tests with:
-```bash
-pytest
-# or
-pytest -v --tb=short
+```
+File → ParserRegistry → DocumentParser → ParsedDocument
+     → SpacyBackend (NER per page)     → ExtractedEntity[]
+     → SpacyBackend (RE per sentence)  → ExtractedRelationship[]
+     → EntityResolver                  → entity_id (merge or create)
+     → EntityStore / RelationshipStore → SQLite
 ```
 
-## Framework Notes
+### Database Schema (5 tables)
 
-The `.gitignore` includes patterns for common Python web frameworks. Once a framework is chosen, update this section with:
-- How to run the development server
-- Database migration commands
-- Environment variable requirements
+| Table | Purpose |
+|---|---|
+| `documents` | File metadata, hash (idempotency), processing status |
+| `entities` | Canonical entities with JSON aliases and attributes |
+| `relationships` | Directed edges (source → target) with confidence score |
+| `entity_mentions` | Provenance: entity ↔ document/page/passage |
+| `relationship_evidence` | Provenance: relationship ↔ document/page/passage |
 
-### If Django is used
-```bash
-python manage.py runserver
-python manage.py migrate
-python manage.py test
+Plus FTS5 virtual table `entities_fts` for full-text entity search.
+
+### Confidence Scoring
+
+```
+final = 0.40 × extraction_confidence
+      + 0.35 × corroboration_score        (log-scale, # confirming docs)
+      + 0.25 × source_reliability          (user-configurable per document)
 ```
 
-### If Flask is used
-```bash
-flask run
-flask db upgrade    # if Flask-Migrate is used
-pytest
-```
+### Entity Resolution
 
-## Environment Variables
+1. Exact canonical name match → merge (score 1.0)
+2. Alias match → merge (score 0.95)
+3. `difflib.SequenceMatcher` similarity ≥ `merge_threshold` (default 0.85) → merge
+4. Similarity ≥ `review_threshold` (default 0.65) → flag UNDER_REVIEW
+5. Below → create new entity
 
-- Never commit `.env` or `.envrc` files
-- Document required environment variables here as they are defined
-- Use `.env.example` as a template for local setup
+### Pluggable NLP Backend
+
+`ExtractionBackend` is defined as a `Protocol` in `src/kn0/extraction/base.py`. To add a new backend (e.g., Hugging Face), implement `extract_entities()` and `extract_relationships()` and pass it to `ingest_document(..., backend=your_backend)`.
+
+## Configuration (`config.py`)
+
+All settings read from environment / `.env` via `pydantic-settings`:
+
+| Variable | Default | Description |
+|---|---|---|
+| `DATABASE_URL` | `sqlite:///./kn0.db` | SQLAlchemy DB URL |
+| `UPLOAD_DIR` | `./uploads` | Local file storage |
+| `SPACY_MODEL` | `en_core_web_sm` | spaCy model name |
+| `MERGE_THRESHOLD` | `0.85` | Auto-merge similarity threshold |
+| `REVIEW_THRESHOLD` | `0.65` | Ambiguous match threshold |
+| `MIN_CONFIDENCE_DISPLAY` | `0.3` | Hide relationships below this score |
+| `SOURCE_RELIABILITY_DEFAULT` | `0.5` | Default source weight |
 
 ## AI Assistant Instructions
 
@@ -127,40 +164,19 @@ When working on this repository:
 
 1. **Explore before editing** — read relevant files before making changes
 2. **Minimal changes** — only modify what is necessary; avoid scope creep
-3. **Preserve conventions** — follow existing code style, naming, and structure once established
+3. **Preserve conventions** — SQLAlchemy Core (not ORM), no raw SQL outside `store.py`
 4. **No secret leakage** — never hardcode credentials, tokens, or keys
-5. **Test awareness** — if tests exist, ensure they pass after changes
-6. **Update documentation** — keep README and this file current when making significant structural changes
+5. **Test awareness** — run `pytest` after changes; maintain 100% pass rate
+6. **Update documentation** — keep README and this file current when making structural changes
 7. **Branch hygiene** — always develop on the designated feature branch
+8. **Type hints** — all new functions must have type annotations
+9. **Idempotency** — document ingestion is hash-based idempotent; preserve this property
 
-## Common Commands (to be updated as project grows)
+## Development Milestones
 
-```bash
-# Install dependencies (adapt based on package manager found)
-pip install -r requirements.txt
-# or
-uv sync
-# or
-poetry install
-
-# Run linter
-ruff check .
-
-# Run formatter
-ruff format .
-
-# Run type checker
-mypy .
-
-# Run tests
-pytest
-
-# Run tests with coverage
-pytest --cov
-```
-
-## Notes for Future Development
-
-- This file should be updated whenever major architectural decisions are made (framework choice, database, deployment strategy)
-- Add CI/CD configuration details here once GitHub Actions or similar is set up
-- Document any non-obvious design decisions or constraints
+| Phase | Status | Description |
+|---|---|---|
+| 1 — Foundation | ✅ Complete | Scaffold, DB schema, PDF/text ingestion, NER, entity resolution, confidence scoring, CLI |
+| 2 — Relationships | Planned | Full RE pipeline, FastAPI REST API (`src/kn0/api/`) |
+| 3 — Visualization | Planned | Interactive network graph via Pyvis/D3.js (`src/kn0/visualization/`) |
+| 4 — Polish | Planned | DOCX/HTML/CSV parsers, pluggable NLP backends, Docker image |
