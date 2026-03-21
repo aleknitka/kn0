@@ -1,8 +1,8 @@
 # kn0
 
-**Open-source knowledge graph inspired by Palantir Gotham — Entity, Relationship & Event Extraction Engine**
+**Structured intelligence knowledge graph for documents — Entity, Relationship & Event Extraction Engine**
 
-kn0 transforms unstructured documents into a structured, queryable knowledge graph. Upload PDFs and text files, and the system automatically identifies entities (people, organizations, locations, dates, concepts), the relationships between them, and the events that connect them — all stored locally with full source provenance.
+kn0 turns unstructured documents into a structured, queryable knowledge graph. Feed it PDFs and text files; it extracts entities (people, organizations, locations, events), maps the relationships between them, and builds a navigable intelligence picture — all stored locally with full source provenance and zero external dependencies.
 
 ## Features
 
@@ -18,42 +18,76 @@ kn0 transforms unstructured documents into a structured, queryable knowledge gra
 - **Local SQLite storage** — zero infrastructure, single-file database
 - **CLI interface** — ingest documents and query the knowledge graph from the terminal
 
-## Quickstart
+## How It Works
+
+```
+Documents → Entities → Relationships → Events → Knowledge Graph
+```
+
+- **Documents** are ingested and hashed — re-ingesting the same file is a no-op.
+- **Entities** are the nodes: people, organizations, locations, dates, concepts. Duplicates are automatically merged using name similarity.
+- **Relationships** are the directed edges between entities, extracted from co-occurring sentences and weighted by a confidence score.
+- **Events** are first-class timeline objects: dated occurrences with typed participants (entity + role) and provenance back to the source document.
+- **Confidence scores** combine extraction certainty, cross-document corroboration, and configurable per-source reliability.
+
+## Usage
+
+### Step 1 — Install and set up
 
 ```bash
-# Install
 pip install -e ".[dev]"
-
-# Download spaCy model
 python -m spacy download en_core_web_sm
+cp .env.example .env       # edit DATABASE_URL if needed
+alembic upgrade head        # creates kn0.db
+```
 
-# Initialize / migrate the database
-alembic upgrade head
+### Step 2 — Ingest documents
 
-# Ingest a document
-kn0 ingest path/to/document.pdf
+```bash
+kn0 ingest report.pdf
+kn0 ingest memo.txt --reliability 0.9   # higher weight for trusted sources
+```
 
-# List extracted entities
-kn0 entities
-kn0 entities --type PERSON
-kn0 entities --search "Apple"
+Re-ingesting the same file is safe — kn0 detects the duplicate by file hash and skips it.
 
-# List relationships
-kn0 relationships --min-confidence 0.5
+### Step 3 — Explore entities
 
-# List events
-kn0 events
-kn0 events --type MEETING --after 2024-01-01
+```bash
+kn0 entities                      # all entities (default: 20 shown)
+kn0 entities --type PERSON        # filter by type
+kn0 entities --type ORGANIZATION
+kn0 entities --search "Apple"     # full-text search
+kn0 entities --limit 50
+```
 
-# View chronological timeline
-kn0 timeline
-kn0 timeline --entity <entity-id> --after 2020-01-01
+Available types: `PERSON`, `ORGANIZATION`, `LOCATION`, `DATE`, `EVENT`, `CONCEPT`, `MONETARY`, `OTHER`
 
-# Show statistics
-kn0 status
+### Step 4 — Explore relationships
 
-# List all ingested documents
-kn0 documents
+```bash
+kn0 relationships                        # all relationships
+kn0 relationships --type WORKS_FOR
+kn0 relationships --min-confidence 0.6   # only high-confidence edges
+```
+
+### Step 5 — Explore events & timeline
+
+```bash
+kn0 events                                  # all events
+kn0 events --type MEETING
+kn0 events --after 2023-01-01 --before 2024-12-31
+kn0 events --entity <entity-id>             # events an entity participated in
+
+kn0 timeline                                # chronological view, undated events last
+kn0 timeline --type CONFLICT
+kn0 timeline --entity <entity-id>
+```
+
+### Step 6 — Check the graph at a glance
+
+```bash
+kn0 status      # document, entity, relationship, and event counts
+kn0 documents   # list all ingested files with processing status
 ```
 
 ## Project Structure
