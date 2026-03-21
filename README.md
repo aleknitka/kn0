@@ -119,6 +119,49 @@ MIN_CONFIDENCE_DISPLAY=0.3
 SOURCE_RELIABILITY_DEFAULT=0.5
 ```
 
+## Docker
+
+### Build and run
+
+```bash
+docker build -t kn0 .
+docker run --rm -v kn0_data:/data kn0 kn0 status
+```
+
+The entrypoint automatically runs `alembic upgrade head` on every start, so the database is always up to date.
+
+### Ingest a document
+
+Mount your documents directory alongside the data volume:
+
+```bash
+docker run --rm \
+  -v kn0_data:/data \
+  -v /path/to/your/docs:/docs \
+  kn0 kn0 ingest /docs/report.pdf
+```
+
+### Query the graph
+
+```bash
+docker run --rm -v kn0_data:/data kn0 kn0 entities --type PERSON
+docker run --rm -v kn0_data:/data kn0 kn0 timeline
+```
+
+### Using Docker Compose
+
+```bash
+# Build once
+docker compose build
+
+# Run any kn0 command
+docker compose run --rm kn0 kn0 status
+docker compose run --rm kn0 kn0 entities --type PERSON
+docker compose run --rm -v /path/to/docs:/docs kn0 kn0 ingest /docs/report.pdf
+```
+
+The `kn0_data` named volume persists the SQLite database and uploads across runs.
+
 ## Extending Types
 
 Register custom types at application startup:
