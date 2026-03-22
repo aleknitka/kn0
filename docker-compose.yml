@@ -1,0 +1,16 @@
+services:
+  kn0:
+    build: .
+    volumes:
+      - kn0_data:/data
+    environment:
+      DATABASE_URL: sqlite:////data/kn0.db
+      UPLOAD_DIR: /data/uploads
+      SPACY_MODEL: en_core_web_sm
+    # Override the default CMD to run a specific kn0 command, for example:
+    #   command: ["kn0", "status"]
+    #   command: ["kn0", "entities", "--type", "PERSON"]
+
+volumes:
+  kn0_data:
+    # Named volume — persists the SQLite database and uploads across runs
